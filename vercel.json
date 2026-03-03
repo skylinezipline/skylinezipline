@@ -1,12 +1,7 @@
 {
   "framework": "nextjs",
-  "buildCommand": "next build",
-  "devCommand": "next dev",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
   "installCommand": "npm install",
-  "regions": ["sfo1"],
-  "env": {
-    "NEXTAUTH_URL": "https://ziplineops.vercel.app",
-    "DATABASE_URL": "@database_url",
-    "NEXTAUTH_SECRET": "@nextauth_secret"
-  }
+  "regions": ["sfo1"]
 }
