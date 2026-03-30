@@ -1,18 +1,12 @@
 "use client"
 
-import React, { createContext, useContext, useReducer, type ReactNode } from "react"
+import React, { createContext, useContext, useReducer, useEffect, useCallback, type ReactNode } from "react"
+import { toast } from "sonner"
 import type {
   Booking, BookingGuest, Lead, LeadNote, EquipmentItem,
   Inspection, MaintenanceTask, FAQItem, Invoice, Notification,
   DailyStaffSchedule, StaffAssignment, SiteMedia, UGCPost, ScheduledPost,
 } from "./types"
-import {
-  bookings as initialBookings, leads as initialLeads,
-  equipmentItems as initialEquipment, inspections as initialInspections,
-  maintenanceTasks as initialMaintenance, faqItems as initialFaq,
-  invoices as initialInvoices, initialNotifications,
-  siteMediaLibrary, ugcPosts as initialUGC, scheduledPosts as initialScheduled,
-} from "./mock-data"
 
 // ============================================================
 // STATE
@@ -31,22 +25,24 @@ interface AppState {
   siteMedia: SiteMedia[]
   ugcPosts: UGCPost[]
   scheduledPosts: ScheduledPost[]
+  isLoaded: boolean
 }
 
 const initialState: AppState = {
-  selectedLocationId: "loc-1",
-  bookings: initialBookings,
-  leads: initialLeads,
-  equipment: initialEquipment,
-  inspections: initialInspections,
-  maintenance: initialMaintenance,
-  faqItems: initialFaq,
-  invoices: initialInvoices,
-  notifications: initialNotifications,
+  selectedLocationId: "",
+  bookings: [],
+  leads: [],
+  equipment: [],
+  inspections: [],
+  maintenance: [],
+  faqItems: [],
+  invoices: [],
+  notifications: [],
   staffSchedules: [],
-  siteMedia: siteMediaLibrary,
-  ugcPosts: initialUGC,
-  scheduledPosts: initialScheduled,
+  siteMedia: [],
+  ugcPosts: [],
+  scheduledPosts: [],
+  isLoaded: false,
 }
 
 // ============================================================
@@ -54,6 +50,7 @@ const initialState: AppState = {
 // ============================================================
 type Action =
   | { type: "SET_LOCATION"; locationId: string }
+  | { type: "LOAD_DATA"; data: Partial<AppState> }
   | { type: "ADD_BOOKING"; booking: Booking }
   | { type: "UPDATE_BOOKING"; id: string; updates: Partial<Booking> }
   | { type: "CHECK_IN_GUEST"; bookingId: string; guestId: string; weight?: number }
@@ -99,6 +96,9 @@ function appReducer(state: AppState, action: Action): AppState {
     case "SET_LOCATION":
       return { ...state, selectedLocationId: action.locationId }
 
+    case "LOAD_DATA":
+      return { ...state, ...action.data, isLoaded: true }
+
     case "ADD_BOOKING":
       return { ...state, bookings: [...state.bookings, action.booking] }
 
@@ -141,7 +141,6 @@ function appReducer(state: AppState, action: Action): AppState {
       }
 
     case "BLOCK_SLOT":
-      // We don't modify timeSlots directly (they're static) but this dispatches intent
       return state
 
     case "BULK_CHECK_IN":
@@ -268,13 +267,8 @@ function appReducer(state: AppState, action: Action): AppState {
             ? {
                 ...b,
                 guests: b.guests.map(g => {
-                  if (g.id === action.guestId) {
-                    return { ...g, waiverStatus: action.status }
-                  }
-                  // If this guest is a minor covered by the updated guardian
-                  if (g.guardianGuestId === action.guestId && action.status === "Signed") {
-                    return { ...g, waiverStatus: "Covered" }
-                  }
+                  if (g.id === action.guestId) return { ...g, waiverStatus: action.status }
+                  if (g.guardianGuestId === action.guestId && action.status === "Signed") return { ...g, waiverStatus: "Covered" }
                   return g
                 }),
               }
@@ -318,10 +312,7 @@ function appReducer(state: AppState, action: Action): AppState {
       }
 
     case "DISMISS_NOTIFICATION":
-      return {
-        ...state,
-        notifications: state.notifications.filter(n => n.id !== action.id),
-      }
+      return { ...state, notifications: state.notifications.filter(n => n.id !== action.id) }
 
     case "MARK_NOTIFICATION_READ":
       return {
@@ -332,10 +323,7 @@ function appReducer(state: AppState, action: Action): AppState {
       }
 
     case "CLEAR_READ_NOTIFICATIONS":
-      return {
-        ...state,
-        notifications: state.notifications.filter(n => !n.read),
-      }
+      return { ...state, notifications: state.notifications.filter(n => !n.read) }
 
     case "SET_STAFF_SCHEDULES":
       return { ...state, staffSchedules: action.schedules }
@@ -411,13 +399,35 @@ function appReducer(state: AppState, action: Action): AppState {
       }
 
     case "DELETE_SCHEDULED_POST":
-      return {
-        ...state,
-        scheduledPosts: state.scheduledPosts.filter(p => p.id !== action.id),
-      }
+      return { ...state, scheduledPosts: state.scheduledPosts.filter(p => p.id !== action.id) }
 
     default:
       return state
+  }
+}
+
+// ============================================================
+// API HELPERS
+// ============================================================
+async function apiFetch(url: string, options?: RequestInit) {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
+// Map enum values from DB format to app format
+function mapBooking(b: any): Booking {
+  return {
+    ...b,
+    status: b.status?.replace("_", "-") ?? b.status,
+    paymentStatus: b.paymentStatus?.replace("_", "-") ?? b.paymentStatus,
+    guests: (b.guests ?? []).map((g: any) => ({
+      ...g,
+      waiverStatus: g.waiverStatus?.charAt(0) + g.waiverStatus?.slice(1).toLowerCase().replace("_", " ") ?? g.waiverStatus,
+    })),
   }
 }
 
@@ -426,11 +436,207 @@ function appReducer(state: AppState, action: Action): AppState {
 // ============================================================
 const AppContext = createContext<{
   state: AppState
-  dispatch: React.Dispatch<Action>
+  dispatch: (action: Action) => void
 } | null>(null)
 
-export function AppStoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(appReducer, initialState)
+export function AppStoreProvider({ children, locationId }: { children: ReactNode; locationId?: string }) {
+  const [state, reducerDispatch] = useReducer(appReducer, {
+    ...initialState,
+    selectedLocationId: locationId ?? "",
+  })
+
+  // Load all data from API on mount
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const locId = locationId ?? ""
+        const qs = locId ? `?locationId=${locId}` : ""
+
+        const [
+          bookingsRaw, leads, equipment, inspections,
+          maintenance, faqItems, invoices, notifications,
+          staffSchedules, siteMedia, ugcPosts, scheduledPosts,
+        ] = await Promise.allSettled([
+          apiFetch(`/api/bookings${qs}`),
+          apiFetch(`/api/leads${qs}`),
+          apiFetch(`/api/equipment${qs}`),
+          apiFetch(`/api/inspections`),
+          apiFetch(`/api/maintenance`),
+          apiFetch(`/api/faq${qs}`),
+          apiFetch(`/api/invoices${qs}`),
+          apiFetch(`/api/notifications`),
+          apiFetch(`/api/schedules${qs}`),
+          apiFetch(`/api/media${qs}`),
+          apiFetch(`/api/ugc${qs}`),
+          apiFetch(`/api/scheduled-posts${qs}`),
+        ])
+
+        const getValue = (result: PromiseSettledResult<any>, fallback: any[] = []) =>
+          result.status === "fulfilled" ? result.value : fallback
+
+        reducerDispatch({
+          type: "LOAD_DATA",
+          data: {
+            bookings: getValue(bookingsRaw).map(mapBooking),
+            leads: getValue(leads),
+            equipment: getValue(equipment),
+            inspections: getValue(inspections),
+            maintenance: getValue(maintenance),
+            faqItems: getValue(faqItems),
+            invoices: getValue(invoices),
+            notifications: getValue(notifications),
+            staffSchedules: getValue(staffSchedules),
+            siteMedia: getValue(siteMedia),
+            ugcPosts: getValue(ugcPosts),
+            scheduledPosts: getValue(scheduledPosts),
+            selectedLocationId: locId,
+          },
+        })
+      } catch {
+        // If API fails (e.g. first-time with no data), just mark as loaded
+        reducerDispatch({ type: "LOAD_DATA", data: {} })
+      }
+    }
+
+    loadData()
+  }, [locationId])
+
+  // dispatch: optimistic update + API call in background
+  const apiDispatch = useCallback(async (action: Action) => {
+    // Apply optimistic update immediately
+    reducerDispatch(action)
+
+    try {
+      switch (action.type) {
+        case "ADD_BOOKING": {
+          const { guests, ...data } = action.booking as any
+          await apiFetch("/api/bookings", { method: "POST", body: JSON.stringify({ ...data, guests }) })
+          break
+        }
+        case "UPDATE_BOOKING":
+          await apiFetch(`/api/bookings/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "CHECK_IN_GUEST":
+          await apiFetch(`/api/bookings/${action.bookingId}/guests`, {
+            method: "PATCH",
+            body: JSON.stringify({ guestId: action.guestId, checkedIn: true, ...(action.weight ? { weight: action.weight } : {}) }),
+          })
+          break
+        case "BULK_CHECK_IN":
+          await Promise.all(
+            action.guestIds.map(guestId =>
+              apiFetch(`/api/bookings/${action.bookingId}/guests`, {
+                method: "PATCH",
+                body: JSON.stringify({ guestId, checkedIn: true }),
+              })
+            )
+          )
+          break
+        case "UPDATE_GUEST":
+          await apiFetch(`/api/bookings/${action.bookingId}/guests`, {
+            method: "PATCH",
+            body: JSON.stringify({ guestId: action.guestId, ...action.updates }),
+          })
+          break
+        case "UPDATE_GUEST_WAIVER":
+          await apiFetch(`/api/bookings/${action.bookingId}/guests`, {
+            method: "PATCH",
+            body: JSON.stringify({ guestId: action.guestId, waiverStatus: action.status }),
+          })
+          break
+        case "ADD_LEAD":
+          await apiFetch("/api/leads", { method: "POST", body: JSON.stringify(action.lead) })
+          break
+        case "UPDATE_LEAD_STATUS":
+          await apiFetch(`/api/leads/${action.id}`, { method: "PATCH", body: JSON.stringify({ status: action.status }) })
+          break
+        case "DELETE_LEADS":
+          await apiFetch("/api/leads", { method: "DELETE", body: JSON.stringify({ ids: action.ids }) })
+          break
+        case "BULK_UPDATE_LEAD_STATUS":
+          await Promise.all(action.ids.map(id =>
+            apiFetch(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify({ status: action.status }) })
+          ))
+          break
+        case "BULK_UPDATE_LEAD_LOCATION":
+          await Promise.all(action.ids.map(id =>
+            apiFetch(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify({ locationId: action.locationId }) })
+          ))
+          break
+        case "ADD_LEAD_NOTE":
+          await apiFetch(`/api/leads/${action.leadId}/notes`, { method: "POST", body: JSON.stringify({ text: action.note.text }) })
+          break
+        case "ADD_EQUIPMENT":
+          await apiFetch("/api/equipment", { method: "POST", body: JSON.stringify(action.item) })
+          break
+        case "UPDATE_EQUIPMENT":
+          await apiFetch(`/api/equipment/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "ADD_INSPECTION":
+          await apiFetch("/api/inspections", { method: "POST", body: JSON.stringify(action.inspection) })
+          break
+        case "ADD_MAINTENANCE":
+          await apiFetch("/api/maintenance", { method: "POST", body: JSON.stringify(action.task) })
+          break
+        case "UPDATE_MAINTENANCE":
+          await apiFetch(`/api/maintenance/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "ADD_FAQ":
+          await apiFetch("/api/faq", { method: "POST", body: JSON.stringify(action.item) })
+          break
+        case "UPDATE_FAQ":
+          await apiFetch(`/api/faq/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "ADD_INVOICE":
+          await apiFetch("/api/invoices", { method: "POST", body: JSON.stringify(action.invoice) })
+          break
+        case "UPDATE_INVOICE":
+          await apiFetch(`/api/invoices/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "DISMISS_NOTIFICATION":
+          await apiFetch(`/api/notifications/${action.id}`, { method: "DELETE" })
+          break
+        case "MARK_NOTIFICATION_READ":
+          await apiFetch("/api/notifications", { method: "PATCH", body: JSON.stringify({ ids: [action.id], read: true }) })
+          break
+        case "CLEAR_READ_NOTIFICATIONS":
+          await apiFetch("/api/notifications", { method: "PATCH", body: JSON.stringify({ read: false }) })
+          break
+        case "SET_STAFF_SCHEDULES":
+          // Bulk set - no direct API call needed (handled by schedules page directly)
+          break
+        case "UPDATE_STAFF_SCHEDULE":
+          await apiFetch(`/api/schedules/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "TOGGLE_MEDIA_FAVORITE": {
+          const item = state.siteMedia.find(m => m.id === action.id)
+          if (item) await apiFetch(`/api/media/${action.id}`, { method: "PATCH", body: JSON.stringify({ favorited: !item.favorited }) })
+          break
+        }
+        case "UPDATE_UGC_STATUS":
+          await apiFetch(`/api/ugc/${action.id}`, { method: "PATCH", body: JSON.stringify({ status: action.status }) })
+          break
+        case "ADD_SCHEDULED_POST":
+          await apiFetch("/api/scheduled-posts", { method: "POST", body: JSON.stringify(action.post) })
+          break
+        case "UPDATE_SCHEDULED_POST":
+          await apiFetch(`/api/scheduled-posts/${action.id}`, { method: "PATCH", body: JSON.stringify(action.updates) })
+          break
+        case "DELETE_SCHEDULED_POST":
+          await apiFetch(`/api/scheduled-posts/${action.id}`, { method: "DELETE" })
+          break
+        default:
+          // Actions like SET_LOCATION, BLOCK_SLOT, LINK_MINOR_GUARDIAN are local-only
+          break
+      }
+    } catch {
+      toast.error("Failed to save changes. Please try again.")
+    }
+  }, [state.siteMedia, reducerDispatch])
+
+  // Expose apiDispatch as dispatch so all pages automatically persist
+  const dispatch = useCallback((action: Action) => { void apiDispatch(action) }, [apiDispatch])
+
   return (
     <AppContext.Provider value={{ state, dispatch }}>
       {children}

@@ -8,7 +8,7 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ── Organizations (zipline companies) ─────────────────────────────────────────
+// ── Organizations ─────────────────────────────────────────────────────────────
 
 model Organization {
   id        String   @id @default(cuid())
@@ -20,31 +20,47 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users     User[]
-  locations Location[]
+  users              User[]
+  locations          Location[]
+  staff              Staff[]
+  campaigns          Campaign[]
+  nurtureSequences   NurtureSequence[]
+  resources          Resource[]
+  integrations       Integration[]
 }
 
-// ── Locations (individual zipline sites) ──────────────────────────────────────
+// ── Locations ─────────────────────────────────────────────────────────────────
 
 model Location {
-  id             String   @id @default(cuid())
-  organizationId String
-  name           String
-  address        String?
-  city           String?
-  state          String?
-  timezone       String   @default("America/New_York")
-  capacityPerSlot Int     @default(12)
-  slotIntervalMin Int     @default(20)
-  openTime       String   @default("09:00")
-  closeTime      String   @default("17:00")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  address         String?
+  city            String?
+  state           String?
+  timezone        String   @default("America/New_York")
+  capacityPerSlot Int      @default(12)
+  slotIntervalMin Int      @default(20)
+  openTime        String   @default("09:00")
+  closeTime       String   @default("17:00")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  timeSlots       TimeSlot[]
+  bookings        Booking[]
+  staff           Staff[]
+  equipment       EquipmentItem[]
+  staffSchedules  DailyStaffSchedule[]
+  leads           Lead[]
+  invoices        Invoice[]
+  siteMedia       SiteMedia[]
+  ugcPosts        UGCPost[]
+  scheduledPosts  ScheduledPost[]
+  faqItems        FAQItem[]
 }
 
-// ── Users (operators / staff) ─────────────────────────────────────────────────
+// ── Users (auth accounts) ─────────────────────────────────────────────────────
 
 model User {
   id             String    @id @default(cuid())
@@ -71,7 +87,655 @@ enum UserRole {
   STAFF
 }
 
-// ── NextAuth tables ───────────────────────────────────────────────────────────
+// ── Staff (operational personnel) ─────────────────────────────────────────────
+
+model Staff {
+  id             String    @id @default(cuid())
+  organizationId String
+  locationId     String
+  name           String
+  email          String
+  phone          String?
+  role           StaffRole
+  avatar         String?
+  availability   String[]  // ["Mon","Wed","Fri"]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  location       Location            @relation(fields: [locationId], references: [id])
+  assignments    StaffAssignment[]
+  inspections    Inspection[]
+  certificates   Certificate[]
+  maintenance    MaintenanceTask[]
+}
+
+enum StaffRole {
+  LEAD_GUIDE
+  GUIDE
+  GROUND_CREW
+  CHECKIN_ATTENDANT
+  MANAGER
+  ADMIN
+}
+
+// ── Time Slots ────────────────────────────────────────────────────────────────
+
+model TimeSlot {
+  id               String     @id @default(cuid())
+  locationId       String
+  date             String     // "YYYY-MM-DD"
+  time             String     // "HH:mm"
+  capacity         Int
+  bookedCount      Int        @default(0)
+  status           SlotStatus @default(OPEN)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  location         Location        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  bookings         Booking[]
+  assignedStaff    StaffAssignment[]
+}
+
+enum SlotStatus {
+  OPEN
+  FILLING
+  FULL
+  CLOSED
+}
+
+// ── Bookings ──────────────────────────────────────────────────────────────────
+
+model Booking {
+  id             String        @id @default(cuid())
+  locationId     String
+  slotId         String
+  date           String        // "YYYY-MM-DD"
+  time           String        // "HH:mm"
+  contactName    String
+  contactEmail   String
+  contactPhone   String
+  partySize      Int
+  status         BookingStatus @default(PENDING)
+  paymentStatus  PaymentStatus @default(PENDING)
+  notes          String        @default("")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  location       Location      @relation(fields: [locationId], references: [id])
+  slot           TimeSlot      @relation(fields: [slotId], references: [id])
+  guests         BookingGuest[]
+  invoices       Invoice[]
+}
+
+enum BookingStatus {
+  CONFIRMED
+  PENDING
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PAID
+  PENDING
+  REFUNDED
+  PARTIAL
+}
+
+// ── Booking Guests ────────────────────────────────────────────────────────────
+
+model BookingGuest {
+  id               String        @id @default(cuid())
+  bookingId        String
+  name             String
+  age              Int
+  isMinor          Boolean       @default(false)
+  guardianGuestId  String?
+  waiverStatus     WaiverStatus  @default(OUTSTANDING)
+  checkedIn        Boolean       @default(false)
+  weight           Int?
+  email            String?
+  phone            String?
+
+  booking          Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  guardian         BookingGuest? @relation("MinorGuardian", fields: [guardianGuestId], references: [id])
+  minors           BookingGuest[] @relation("MinorGuardian")
+}
+
+enum WaiverStatus {
+  SIGNED
+  COVERED
+  OUTSTANDING
+  SENT
+}
+
+// ── Staff Schedules ───────────────────────────────────────────────────────────
+
+model DailyStaffSchedule {
+  id            String         @id @default(cuid())
+  locationId    String
+  date          String         // "YYYY-MM-DD"
+  status        ScheduleStatus @default(DRAFT)
+  totalGuests   Int            @default(0)
+  totalSlots    Int            @default(0)
+  peakSlotGuests Int           @default(0)
+  isWeekend     Boolean        @default(false)
+  isHoliday     Boolean        @default(false)
+  holidayName   String?
+  notes         String         @default("")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  location      Location        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  assignments   StaffAssignment[]
+}
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model StaffAssignment {
+  id          String   @id @default(cuid())
+  scheduleId  String
+  slotId      String?
+  staffId     String
+  role        StaffRole
+  shiftStart  String   // "HH:mm"
+  shiftEnd    String   // "HH:mm"
+
+  schedule    DailyStaffSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  slot        TimeSlot?          @relation(fields: [slotId], references: [id])
+  staff       Staff              @relation(fields: [staffId], references: [id])
+}
+
+// ── Equipment ─────────────────────────────────────────────────────────────────
+
+model EquipmentItem {
+  id                 String            @id @default(cuid())
+  locationId         String
+  category           EquipmentCategory
+  name               String
+  serialNumber       String
+  manufacturer       String
+  model              String
+  purchaseDate       String
+  inServiceDate      String
+  status             EquipmentStatus   @default(ACTIVE)
+  condition          EquipmentCondition @default(GOOD)
+  lastInspectionDate String?
+  retireByDate       String?
+  notes              String            @default("")
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  location           Location          @relation(fields: [locationId], references: [id])
+  inspections        Inspection[]
+  maintenanceTasks   MaintenanceTask[]
+}
+
+enum EquipmentCategory {
+  HARNESSES
+  TROLLEYS
+  HELMETS
+  LANYARDS
+  CARABINERS
+  BRAKES
+  TOWER_COMPONENTS
+}
+
+enum EquipmentStatus {
+  ACTIVE
+  QUARANTINED
+  RETIRED
+}
+
+enum EquipmentCondition {
+  GOOD
+  WATCH
+  REPLACE
+}
+
+// ── Inspections ───────────────────────────────────────────────────────────────
+
+model Inspection {
+  id              String           @id @default(cuid())
+  equipmentId     String
+  inspectorId     String
+  date            String
+  type            InspectionType
+  overallResult   InspectionResult
+  notes           String           @default("")
+  photos          String[]
+  createdAt       DateTime         @default(now())
+
+  equipment       EquipmentItem    @relation(fields: [equipmentId], references: [id])
+  inspector       Staff            @relation(fields: [inspectorId], references: [id])
+  checklist       InspectionChecklistItem[]
+  maintenanceTasks MaintenanceTask[]
+}
+
+enum InspectionType {
+  ROUTINE
+  PRE_USE
+  ANNUAL
+}
+
+enum InspectionResult {
+  PASS
+  NEEDS_ADJUSTMENT
+  FAIL
+}
+
+model InspectionChecklistItem {
+  id           String           @id @default(cuid())
+  inspectionId String
+  label        String
+  result       InspectionResult
+  notes        String?
+
+  inspection   Inspection       @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+}
+
+// ── Maintenance ───────────────────────────────────────────────────────────────
+
+model MaintenanceTask {
+  id           String            @id @default(cuid())
+  equipmentId  String
+  inspectionId String?
+  assignedToId String?
+  title        String
+  description  String
+  status       MaintenanceStatus @default(OPEN)
+  priority     MaintenancePriority
+  partsUsed    String[]
+  laborNotes   String            @default("")
+  completedAt  DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  equipment    EquipmentItem     @relation(fields: [equipmentId], references: [id])
+  inspection   Inspection?       @relation(fields: [inspectionId], references: [id])
+  assignedTo   Staff?            @relation(fields: [assignedToId], references: [id])
+}
+
+enum MaintenanceStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_PARTS
+  COMPLETED
+  VERIFIED
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ── Certificates ──────────────────────────────────────────────────────────────
+
+model Certificate {
+  id          String            @id @default(cuid())
+  staffId     String
+  type        String
+  issueDate   String
+  expiryDate  String
+  status      CertificateStatus @default(VALID)
+  documentUrl String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  staff       Staff             @relation(fields: [staffId], references: [id], onDelete: Cascade)
+}
+
+enum CertificateStatus {
+  VALID
+  EXPIRING_SOON
+  EXPIRED
+}
+
+// ── Marketing ─────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  channel        CampaignChannel
+  status         CampaignStatus @default(ACTIVE)
+  spend          Float          @default(0)
+  revenue        Float          @default(0)
+  roas           Float          @default(0)
+  cpl            Float          @default(0)
+  impressions    Int            @default(0)
+  clicks         Int            @default(0)
+  leads          Int            @default(0)
+  bookings       Int            @default(0)
+  startDate      String
+  endDate        String?
+  platformUrl    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum CampaignChannel {
+  GA4
+  GOOGLE_ADS
+  META_ADS
+}
+
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+model Lead {
+  id         String     @id @default(cuid())
+  locationId String
+  name       String
+  email      String
+  phone      String
+  source     String
+  status     LeadStatus @default(NEW)
+  value      Float?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  location   Location   @relation(fields: [locationId], references: [id])
+  notes      LeadNote[]
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  WON
+  LOST
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  leadId    String
+  text      String
+  author    String
+  createdAt DateTime @default(now())
+
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+model NurtureSequence {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  description    String
+  trigger        String
+  status         NurtureStatus  @default(DRAFT)
+  enrolled       Int            @default(0)
+  openRate       Float          @default(0)
+  clickRate      Float          @default(0)
+  replyRate      Float          @default(0)
+  conversionRate Float          @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps          NurtureStep[]
+}
+
+enum NurtureStatus {
+  ACTIVE
+  DRAFT
+  PAUSED
+}
+
+model NurtureStep {
+  id              String      @id @default(cuid())
+  sequenceId      String
+  order           Int
+  type            StepType
+  subject         String?
+  body            String?
+  waitDays        Int?
+  conditionField  String?
+  conditionValue  String?
+
+  sequence        NurtureSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+}
+
+enum StepType {
+  EMAIL
+  SMS
+  WAIT
+  CONDITION
+}
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id            String        @id @default(cuid())
+  bookingId     String
+  locationId    String
+  contactName   String
+  contactEmail  String
+  amount        Float
+  tax           Float         @default(0)
+  total         Float
+  status        InvoiceStatus @default(DRAFT)
+  issuedDate    String
+  dueDate       String
+  paidDate      String?
+  notes         String        @default("")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  booking       Booking       @relation(fields: [bookingId], references: [id])
+  location      Location      @relation(fields: [locationId], references: [id])
+  lineItems     InvoiceLineItem[]
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Int
+  unitPrice   Float
+  total       Float
+
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+// ── FAQs ──────────────────────────────────────────────────────────────────────
+
+model FAQItem {
+  id         String   @id @default(cuid())
+  locationId String
+  question   String
+  answer     String
+  category   String
+  tags       String[]
+  published  Boolean  @default(false)
+  usedByAI   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  location   Location @relation(fields: [locationId], references: [id])
+}
+
+// ── Resources ─────────────────────────────────────────────────────────────────
+
+model Resource {
+  id             String       @id @default(cuid())
+  organizationId String
+  title          String
+  description    String
+  type           ResourceType
+  url            String?
+  category       String
+  tags           String[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum ResourceType {
+  MANUAL
+  DOCUMENT
+  VIDEO
+  LINK
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+
+model Integration {
+  id             String            @id @default(cuid())
+  organizationId String
+  name           String
+  type           String
+  status         IntegrationStatus @default(DISCONNECTED)
+  config         Json?
+  lastSync       DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+// ── Media ─────────────────────────────────────────────────────────────────────
+
+model SiteMedia {
+  id           String      @id @default(cuid())
+  locationId   String
+  type         MediaType
+  source       MediaSource
+  url          String
+  thumbnailUrl String
+  capturedDate String
+  tourSlotTime String?
+  guideName    String?
+  tags         String[]
+  favorited    Boolean     @default(false)
+  usedInPost   Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+
+  location     Location    @relation(fields: [locationId], references: [id])
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+  GOPRO
+}
+
+enum MediaSource {
+  ON_SITE
+  INSTAGRAM
+  TIKTOK
+  GOOGLE_REVIEW
+  MANUAL_UPLOAD
+}
+
+model UGCPost {
+  id          String    @id @default(cuid())
+  locationId  String
+  platform    UGCPlatform
+  username    String
+  displayName String
+  avatarUrl   String
+  caption     String
+  mediaUrl    String
+  likes       Int       @default(0)
+  comments    Int       @default(0)
+  postedAt    DateTime
+  status      UGCStatus @default(PENDING)
+  tags        String[]
+  createdAt   DateTime  @default(now())
+
+  location    Location  @relation(fields: [locationId], references: [id])
+}
+
+enum UGCPlatform {
+  INSTAGRAM
+  TIKTOK
+  GOOGLE_REVIEW
+}
+
+enum UGCStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ScheduledPost {
+  id            String     @id @default(cuid())
+  locationId    String
+  platform      PostPlatform
+  mediaIds      String[]
+  caption       String
+  hashtags      String[]
+  scheduledDate String
+  scheduledTime String
+  status        PostStatus @default(DRAFT)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  location      Location   @relation(fields: [locationId], references: [id])
+}
+
+enum PostPlatform {
+  INSTAGRAM
+  FACEBOOK
+  TIKTOK
+  ALL
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String
+  type           NotificationType
+  title          String
+  description    String
+  read           Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+}
+
+enum NotificationType {
+  OVERBOOKED
+  WAIVER
+  CERTIFICATE
+  MAINTENANCE
+  PAYMENT
+  GENERAL
+}
+
+// ── NextAuth ──────────────────────────────────────────────────────────────────
 
 model Account {
   id                String  @id @default(cuid())
